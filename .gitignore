@@ -1,0 +1,19 @@
+# Ignore all
+*
+
+# Unignore all files with extensions
+!*.*
+
+# Unignore all directories
+!*/
+
+# Unignore makefiles
+!Makefile
+
+# Ignore all files with extensions that could be binary files
+*.o
+*.elf
+*.bin
+
+# Ignore Python compiled code directories
+__pycache__/
