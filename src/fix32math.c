@@ -23,7 +23,7 @@
  */
 
 
-#include "../fix_math.h"
+#include "fix32math.h"
 
 #define ASSERT(cond, msg)
 
