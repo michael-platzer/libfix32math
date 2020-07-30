@@ -1,7 +1,4 @@
 
-TCREST_BIN ?= /home/michael/Documents/t-crest/local/bin
-export PATH=$(shell echo $$PATH):$(TCREST_BIN)
-
 CC = patmos-clang
 AR = patmos-ar
 
