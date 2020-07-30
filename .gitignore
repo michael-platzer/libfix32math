@@ -12,6 +12,7 @@
 
 # Ignore all files with extensions that could be binary files
 *.o
+*.a
 *.elf
 *.bin
 
