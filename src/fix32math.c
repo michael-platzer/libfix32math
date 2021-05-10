@@ -25,7 +25,6 @@
 
 #include "fix32math.h"
 
-#define ASSERT(cond, msg)
 
 #define FIX32_INVSQRT_NEWTON_ITERS    2
 
@@ -33,19 +32,20 @@
  * Approximate the inverse square root using cubic interpolation refined with
  * Newton's method.  Well-conditioned and smooth with continuous first
  * derivative.  Accepts and returns unsigned 32-bit fixed point values with a
- * scaling factor of 2^scale, where scale must be even.  Undefined for val = 0.
- * Modifies scale to return a value with high precision.
+ * scaling factor of 2^scale.  Undefined for val = 0.  Modifies scale to return
+ * a value with high precision.
  */
 uint32_t fix32_invsqrt(uint32_t val, int *scale)
 {
-    ASSERT(((*scale) & 1) == 0, "scale is odd")
-    //if ((scale & 1))
-    //    val = (val + 1) >> 1;
-
-    uint32_t val_copy = val; // save a copy of val for later
-
     // Let: val = a * 2^(2n) , with 1 <= a < 4
     // then: sqrt(val) = sqrt(a) * 2^n
+
+    // As a prerequisite, scale must be even
+    int odd = *scale & 1;
+    val = (val + odd) >> odd;
+    *scale += odd;
+
+    uint32_t val_copy = val; // save a copy of val for later
 
     // Let's start by extracting a; get the index of the highest set bit:
     int msb = 0;

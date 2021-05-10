@@ -118,7 +118,7 @@ static int32_t fix32_mul(int32_t a, int32_t b, int n)
 
 /**
  * Approximate the inverse square root of a 32-bit fixed point value with a
- * scaling factor of 2^scale, where scale is even.  Undefined for val = 0.
+ * scaling factor of 2^scale.  Undefined for val = 0.
  *
  * The approximation is calculated using cubic interpolation and improved with
  * one or two iterations of Newton's method (see FIX32_INVSQRT_NEWTON_ITERS).
