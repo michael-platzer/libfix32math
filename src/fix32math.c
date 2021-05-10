@@ -49,6 +49,31 @@ uint32_t fix32_invsqrt(uint32_t val, int *scale)
 
     // Let's start by extracting a; get the index of the highest set bit:
     int msb = 0;
+#ifdef __riscv
+    asm("li     t0, 0xffff\n\t"
+        "sltu   t0, t0, %1\n\t"
+        "slli   %0, t0, 4\n\t"
+        "srl    t1, %1, %0\n\t"
+
+        "li     t0, 0xff\n\t"
+        "sltu   t0, t0, t1\n\t"
+        "slli   t0, t0, 3\n\t"
+        "add    %0, %0, t0\n\t"
+        "srl    t1, t1, t0\n\t"
+
+        "li     t0, 0xf\n\t"
+        "sltu   t0, t0, t1\n\t"
+        "slli   t0, t0, 2\n\t"
+        "add    %0, %0, t0\n\t"
+        "srl    t1, t1, t0\n\t"
+
+        "li     t0, 0x3\n\t"
+        "sltu   t0, t0, t1\n\t"
+        "slli   t0, t0, 1\n\t"
+        "add    %0, %0, t0\n\t"
+
+        : "=r"(msb) : "r"(val) : "t0", "t1");
+#else
     if (val & 0xFFFF0000) {
         val &= 0xFFFF0000;
         msb += 16;
@@ -63,6 +88,7 @@ uint32_t fix32_invsqrt(uint32_t val, int *scale)
     }
     if (val & 0xCCCCCCCC)
         msb += 2;
+#endif
 
     // extract 'a' by correctly shifting val; since 1 <= a < 4, it can be
     // stored with a scaling factor of 2^30 for maximum precision:
