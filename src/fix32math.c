@@ -45,11 +45,13 @@ uint32_t fix32_invsqrt(uint32_t val, int *scale)
     val = (val + odd) >> odd;
     *scale += odd;
 
-    uint32_t val_copy = val; // save a copy of val for later
+    // Let's start by extracting a; get the index of the highest set bit in
+    // 'val' (actually, that index has to be even, so it's either the index of
+    // the highest set bit or the index of the bit after the highest set bit).
+    int msb_even = 0;
 
-    // Let's start by extracting a; get the index of the highest set bit:
-    int msb = 0;
 #ifdef __riscv
+    // optimize MSB extraction for RISC-V with non-branching code
     asm("li     t0, 0xffff\n\t"
         "sltu   t0, t0, %1\n\t"
         "slli   %0, t0, 4\n\t"
@@ -72,87 +74,95 @@ uint32_t fix32_invsqrt(uint32_t val, int *scale)
         "slli   t0, t0, 1\n\t"
         "add    %0, %0, t0\n\t"
 
-        : "=r"(msb) : "r"(val) : "t0", "t1");
+        : "=r"(msb_even) : "r"(val) : "t0", "t1");
 #else
-    if (val & 0xFFFF0000) {
-        val &= 0xFFFF0000;
-        msb += 16;
+    uint32_t val_copy = val;
+    if (val_copy & 0xFFFF0000) {
+        val_copy &= 0xFFFF0000;
+        msb_even += 16;
     }
-    if (val & 0xFF00FF00) {
-        val &= 0xFF00FF00;
-        msb += 8;
+    if (val_copy & 0xFF00FF00) {
+        val_copy &= 0xFF00FF00;
+        msb_even += 8;
     }
-    if (val & 0xF0F0F0F0) {
-        val &= 0xF0F0F0F0;
-        msb += 4;
+    if (val_copy & 0xF0F0F0F0) {
+        val_copy &= 0xF0F0F0F0;
+        msb_even += 4;
     }
-    if (val & 0xCCCCCCCC)
-        msb += 2;
+    if (val_copy & 0xCCCCCCCC)
+        msb_even += 2;
 #endif
 
     // extract 'a' by correctly shifting val; since 1 <= a < 4, it can be
-    // stored with a scaling factor of 2^30 for maximum precision:
-    uint32_t a = val_copy << (30 - msb);
+    // stored with a scaling factor of 2^30 for maximum precision
+    uint32_t a = val << (30 - msb_even);
 
-    // 'n' can be calculated from 'scale' and the highest bit index 'msb':
-    // n = (msb - scale) / 2 ; n is therefore in the range [-15,15]
-    int n = (msb - *scale) >> 1; // works for negative n since values are even
+    // 'n' can be calculated from 'scale' and the highest bit index 'msb_even'
+    // (note that bit shifting instead of division also works for negative n
+    // since both 'msb_even' and '*scale' are even)
+    int n = (msb_even - *scale) >> 1;
 
     // Next, we approximate 1/sqrt(a); this is done by cubic interpolation in
     // order to get smooth transitions between interpolation intervals.
     // Since 1 <= a < 4 we interpolate in the interval [1,4].
-    // The derivative of 1/sqrt(a) is: d/da 1/sqrt(a) = -1 / (2 a sqrt(a)),
+    // The derivative of 1/sqrt(a) is: d/da 1/sqrt(a) = -1/(2 a sqrt(a)),
     // therefore these are the boundary conditions:
     // 1/sqrt(1) = 1, 1/sqrt(4) = 0.5,
     // d/da 1/sqrt(a=1) = -0.5, d/da 1/sqrt(a=4) = -0.0625
     // which yields following cubic polynomial:
     // p(a) = -11/432 a^3 + 19/72 a^2 - 137/144 a + 185/108
 
-    // Polynomial constant fractions with scaling factor of 2^30:
-    const uint32_t frac_11_432  = 0x01A12F68,
-                   frac_19_72   = 0x10E38E39,
-                   frac_137_144 = 0x3CE38E39,
-                   frac_185_108 = 0x6DA12F68;
+    // Polynomial constant fractions
+    const uint32_t frac_11_432  = 0x684BDA13, //  11 / 432 with scaling 2^36
+                   frac_19_72   = 0x871C71C7, //  19 / 72  with scaling 2^33
+                   frac_137_144 = 0x3CE38E39, // 137 / 144 with scaling 2^30
+                   frac_185_108 = 0x0DB425ED; // 185 / 108 with scaling 2^27
 
-    // Calculate a^2 and a^3; use scaling factor of 2^28 and 2^26 respectively,
-    // to accomodate for larger ranges (i.e. 1 <= a^2 < 16 and 1 <= a^3 < 64 ):
-    uint32_t a_squ = ((uint64_t)a * a     + (1u<<31)) >> 32,
-             a_cub = ((uint64_t)a * a_squ + (1u<<31)) >> 32;
+    // Calculate a^2 and a^3; use scaling factor of 2^27 and 2^24 respectively,
+    // to accomodate for larger ranges (i.e., 1 <= a^2 < 16 and 1 <= a^3 < 64 )
+    // and require calculating the upper 32-bit word only (despite rounding)
+    uint32_t a_squ = ((uint64_t)a * a     + (1uLL<<32)) >> 33, // scale 2^27
+             a_cub = ((uint64_t)a * a_squ + (1uLL<<32)) >> 33; // scale 2^24
 
-    // Do additions before subtractions and use a scaling factor of 2^28 for
-    // intermediate results to avoid overflow of unsigned integers:
-    uint32_t res = ((frac_185_108 + (1u<<1)) >> 2)
-                + (uint32_t)(((uint64_t)frac_19_72 * a_squ + (1u<<29)) >> 30)
-                - (uint32_t)(((uint64_t)frac_137_144 * a + (1u<<31)) >> 32)
-                - (uint32_t)(((uint64_t)frac_11_432 * a_cub + (1u<<27)) >> 28);
+    // Do additions before subtractions and use a scaling factor of 2^27 for
+    // intermediate results to avoid overflow of unsigned integers and require
+    // calculating the upper 32-bit word only for 64-bit multiplications
+    uint32_t res = (((          frac_185_108
+        + (uint32_t)(((uint64_t)frac_19_72   * a_squ + (1uLL<<32)) >> 33) )
+        - (uint32_t)(((uint64_t)frac_137_144 * a     + (1uLL<<32)) >> 33) )
+        - (uint32_t)(((uint64_t)frac_11_432  * a_cub + (1uLL<<32)) >> 33) );
 
     // 0.5 < res <= 1 ; scale res up to a scaling factor of 2^30 (we could use
     // 2^31, but it should be possible to cast the final res to a signed 32-bit
-    // integer without issues, thus we use 2^30 to keep the sign bit clear):
-    res <<= 2;
+    // integer without issues, thus we use 2^30 to keep the sign bit clear)
+    res <<= 3;
 
 #ifdef FIX32_INVSQRT_NEWTON_ITERS
-    // Now let us refine this with Newton's method:
+    // Now let us refine this with Newton's method
 
-    const uint32_t threehalfs = 3u<<30; // 1.5 with a scaling factor of 2^31
+    const uint32_t _1p5 = 3u<<24; // 1.5 with a scaling factor of 2^25
     int i;
     for (i = 0; i < FIX32_INVSQRT_NEWTON_ITERS; i++) {
-        // 0.25 < res^2 <= 1 ; store res^2 with a scaling factor of 2^31:
-        uint32_t res_squ = ((uint64_t)res * res + (1u<<28)) >> 29;
+        // 0.25 < res^2 <= 1 ; store res^2 with a scaling factor of 2^28 to
+        // avoid calculating the lower 32-bit multiplication result
+        uint32_t res_squ = ((uint64_t)res * res + (1uLL<<32)) >> 33;
 
-        // Since 1 <= a < 4 , 0.125 <= a * res^2 / 2 < 2 ; keep 2^31 scaling;
-        // 'a' has a scaling factor of 2^30; also, we need to divide by 2:
-        uint32_t half_a_res_squ = ((uint64_t)a * res_squ + (1u<<30)) >> 31;
+        // Since 1 <= a < 4 , 0.125 <= a * res^2 / 2 < 2 ; use a scaling factor
+        // of 2^25 for the result to avoid calculating the lower 32-bit result
+        // of the 64-bit multiplication (note that 'a' has a scaling factor of
+        // 2^30; also, the result of the multiplication is divided by 2)
+        uint32_t half_a_res_squ = ((uint64_t)a * res_squ + (1uLL<<32)) >> 33;
 
         // For a > 2, res < 0.8 , thus res^2 < 0.75 , hence a * res^2 / 2 < 1.5
-        // therefore 1.5 - a * res^2 / 2 is always positive:
-        res = ((uint64_t)res * (threehalfs - half_a_res_squ) + (1<<30)) >> 31;
+        // therefore 1.5 - a * res^2 / 2 is always positive; 'res' should
+        // retain its scaling factor of 2^30
+        res = ((uint64_t)res * (_1p5 - half_a_res_squ) + (1uLL<<24)) >> 25;
     }
 #endif
 
     // Finally, 1/sqrt(val) = 1/sqrt(a) * 2^(-n)
     // The intermediate result has a scaling factor of 2^30; thus the scaling
-    // factor of the final result is 2^(30 + n) ; modify scale accordingly:
+    // factor of the final result is 2^(30 + n) ; modify scale accordingly
     *scale = 30 + n;
 
     return res;
